@@ -105,7 +105,6 @@ class NespressoBluetoothDeviceData:
         Note: the machine allows a single BLE client, so while streaming the
         Nespresso mobile app cannot connect.
         """
-        family = family_from_service_uuids(_service_uuids(ble_device))
         stop_event = stop_event or asyncio.Event()
         loop = asyncio.get_running_loop()
         disconnect_future: asyncio.Future[bool] = loop.create_future()
@@ -116,6 +115,7 @@ class NespressoBluetoothDeviceData:
             disconnected_callback=partial(self._on_disconnect, disconnect_future),
         )
         try:
+            family = self._resolve_family(client)
             if self.auth_key:
                 await self._authenticate(client, family)
             device = await self._read(client, ble_device, family)
@@ -132,10 +132,14 @@ class NespressoBluetoothDeviceData:
         finally:
             await client.disconnect()
 
-    def supports_push(self, ble_device: BLEDevice) -> bool:
-        """Return True if the machine can push state via notifications."""
-        family = family_from_service_uuids(_service_uuids(ble_device))
-        return family in (
+    def supports_push(self, service_uuids: list[str]) -> bool:
+        """Return True if the machine can push state via notifications.
+
+        ``service_uuids`` are the advertised service UUIDs known to the caller
+        (e.g. from Bluetooth discovery). All supported families support
+        notifications.
+        """
+        return family_from_service_uuids(service_uuids) in (
             MachineFamily.VMINI,
             MachineFamily.VERTUO_NEXT,
             MachineFamily.BARISTA,
@@ -150,7 +154,6 @@ class NespressoBluetoothDeviceData:
             disconnect_future.set_result(True)
 
     async def _update_device(self, ble_device: BLEDevice) -> NespressoDevice:
-        family = family_from_service_uuids(_service_uuids(ble_device))
         loop = asyncio.get_running_loop()
         disconnect_future: asyncio.Future[bool] = loop.create_future()
         client = await establish_connection(
@@ -168,11 +171,20 @@ class NespressoBluetoothDeviceData:
                 ),
                 asyncio.timeout(UPDATE_TIMEOUT),
             ):
+                family = self._resolve_family(client)
                 if self.auth_key:
                     await self._authenticate(client, family)
                 return await self._read(client, ble_device, family)
         finally:
             await client.disconnect()
+
+    def _resolve_family(self, client: BleakClient) -> MachineFamily:
+        """Determine the family from the connected GATT services.
+
+        Connected services are authoritative: unlike the advertisement, they are
+        always available once connected and survive routing through a proxy.
+        """
+        return family_from_service_uuids([service.uuid for service in client.services])
 
     async def _authenticate(self, client: BleakClient, family: MachineFamily) -> None:
         if self.auth_key is None:
@@ -355,15 +367,6 @@ class NespressoBluetoothDeviceData:
                 await client.stop_notify(state_uuid)
 
         return _unsub_state
-
-
-def _service_uuids(ble_device: BLEDevice) -> list[str]:
-    details = getattr(ble_device, "details", None)
-    if isinstance(details, dict):
-        uuids = details.get("service_uuids") or details.get("UUIDs")
-        if uuids:
-            return list(uuids)
-    return []
 
 
 def _firmware_from_assets(assets: str) -> str | None:
