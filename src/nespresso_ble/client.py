@@ -151,19 +151,37 @@ class NespressoBluetoothDeviceData:
     async def _connect(
         self, ble_device: BLEDevice, disconnect_future: asyncio.Future[bool]
     ) -> BleakClient:
-        """Establish a connection, bonding at connect time when authenticating.
+        """Establish a connection, clearing a stale bond if one blocks it."""
+        try:
+            return await establish_connection(
+                self.client_class,
+                ble_device,
+                ble_device.address,
+                disconnected_callback=partial(self._on_disconnect, disconnect_future),
+            )
+        except BleakError as err:
+            if not _is_auth_error(err):
+                raise
+            # A stale/half BlueZ bond from a previous attempt blocks the
+            # connection. Remove it and retry once.
+            self.logger.warning(
+                "Connection authentication failed for %s; clearing stale bond",
+                ble_device.address,
+            )
+            await self._unpair(ble_device)
+            return await establish_connection(
+                self.client_class,
+                ble_device,
+                ble_device.address,
+                disconnected_callback=partial(self._on_disconnect, disconnect_future),
+            )
 
-        VMini requires an encrypted (bonded) link before its protected
-        characteristics accept operations, so we pair during connection setup
-        when an auth key is configured. On BlueZ this creates a persistent bond.
-        """
-        return await establish_connection(
-            self.client_class,
-            ble_device,
-            ble_device.address,
-            disconnected_callback=partial(self._on_disconnect, disconnect_future),
-            pair=self.auth_key is not None,
-        )
+    async def _unpair(self, ble_device: BLEDevice) -> None:
+        """Remove any existing bond for the device."""
+        try:
+            await self.client_class(ble_device).unpair()
+        except Exception as err:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+            self.logger.debug("Unpair failed for %s: %s", ble_device.address, err)
 
     async def _update_device(self, ble_device: BLEDevice) -> NespressoDevice:
         loop = asyncio.get_running_loop()
@@ -204,44 +222,18 @@ class NespressoBluetoothDeviceData:
             return
         if family is MachineFamily.VMINI:
             token = self.auth_key.encode("utf-8").ljust(VMINI_TOKEN_LENGTH, b"\x00")
-            # The machine token characteristic requires an encrypted link, so
-            # establish BLE bonding first.
-            await self._pair(client)
+            # The token characteristic is protected; the write triggers the
+            # backend to encrypt the link on demand. If the link cannot be
+            # encrypted the write raises an authentication error, which the
+            # connection layer recovers from by clearing any stale bond.
             try:
                 await client.write_gatt_char(
                     VMINI_CHAR_MACHINE_TOKEN, token, response=True
                 )
             except BleakError as err:
-                # The token characteristic needs a bonded link. Bonding is
-                # normally done at connect time; retry once after an explicit
-                # pair in case the initial bond did not take.
-                self.logger.debug("Token write failed (%s); pairing and retrying", err)
-                if not await self._pair(client):
-                    msg = (
-                        "VMini authentication failed: the machine requires a bonded "
-                        "Bluetooth connection. Bonding is unreliable over an ESPHome "
-                        "Bluetooth proxy; onboard using a local Bluetooth adapter "
-                        f"({err})"
-                    )
-                    raise AuthError(msg) from err
-                try:
-                    await client.write_gatt_char(
-                        VMINI_CHAR_MACHINE_TOKEN, token, response=True
-                    )
-                except BleakError as err2:
-                    msg = f"VMini authentication failed after pairing: {err2}"
-                    raise AuthError(msg) from err2
+                msg = f"VMini authentication failed: {err}"
+                raise AuthError(msg) from err
             self.logger.debug("Wrote VMini machine token (%d bytes)", len(token))
-
-    async def _pair(self, client: BleakClient) -> bool:
-        """Attempt BLE bonding. Returns True when pairing succeeds."""
-        try:
-            await client.pair()
-        except Exception as err:  # noqa: BLE001  # pylint: disable=broad-exception-caught
-            self.logger.debug("Pairing not available/failed: %s", err)
-            return False
-        self.logger.debug("Pairing succeeded")
-        return True
 
     async def _read(
         self, client: BleakClient, ble_device: BLEDevice, family: MachineFamily
@@ -429,6 +421,19 @@ class NespressoBluetoothDeviceData:
                 await client.stop_notify(state_uuid)
 
         return _unsub_state
+
+
+_AUTH_ERROR_MARKERS = (
+    "authentication",
+    "not paired",
+    "encryption",
+)
+
+
+def _is_auth_error(err: BaseException) -> bool:
+    """Return True if the error indicates a bonding/encryption problem."""
+    text = str(err).lower()
+    return any(marker in text for marker in _AUTH_ERROR_MARKERS)
 
 
 def _firmware_from_assets(assets: str) -> str | None:
