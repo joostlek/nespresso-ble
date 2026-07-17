@@ -184,7 +184,12 @@ class NespressoBluetoothDeviceData:
         Connected services are authoritative: unlike the advertisement, they are
         always available once connected and survive routing through a proxy.
         """
-        return family_from_service_uuids([service.uuid for service in client.services])
+        service_uuids = [service.uuid for service in client.services]
+        family = family_from_service_uuids(service_uuids)
+        self.logger.debug(
+            "Resolved family %s from connected services: %s", family, service_uuids
+        )
+        return family
 
     async def _authenticate(self, client: BleakClient, family: MachineFamily) -> None:
         if self.auth_key is None:
@@ -203,20 +208,25 @@ class NespressoBluetoothDeviceData:
         self, client: BleakClient, ble_device: BLEDevice, family: MachineFamily
     ) -> NespressoDevice:
         if family is MachineFamily.VMINI:
-            return await self._read_vmini(client, ble_device)
-        if family is MachineFamily.VERTUO_NEXT:
-            return await self._read_vertuo_next(client, ble_device)
-        if family is MachineFamily.BARISTA:
-            return await self._read_barista(client, ble_device)
-        msg = f"Unsupported machine family: {family}"
-        raise UnsupportedDeviceError(msg)
+            device = await self._read_vmini(client, ble_device)
+        elif family is MachineFamily.VERTUO_NEXT:
+            device = await self._read_vertuo_next(client, ble_device)
+        elif family is MachineFamily.BARISTA:
+            device = await self._read_barista(client, ble_device)
+        else:
+            msg = f"Unsupported machine family: {family}"
+            raise UnsupportedDeviceError(msg)
+        self.logger.debug("Parsed device: %s", device)
+        return device
 
     async def _read_char(self, client: BleakClient, uuid: str) -> bytes | None:
         try:
-            return bytes(await client.read_gatt_char(uuid))
+            data = bytes(await client.read_gatt_char(uuid))
         except BleakError as err:
             self.logger.debug("Could not read %s: %s", uuid, err)
             return None
+        self.logger.debug("Read %s -> %s", uuid, data.hex())
+        return data
 
     async def _read_vmini(
         self, client: BleakClient, ble_device: BLEDevice
@@ -243,7 +253,20 @@ class NespressoBluetoothDeviceData:
         schema = await self._read_char(client, VMINI_CHAR_SHADOW_HEADER)
         values = await self._read_char(client, VMINI_CHAR_SHADOW_UPDATE)
         if schema is not None and values is not None:
-            _apply_vmini_shadow(device, parsing.parse_shadow(schema, values))
+            shadow = parsing.parse_shadow(schema, values)
+            self.logger.debug(
+                "VMini shadow schema=%r values=%r parsed=%s",
+                parsing.decode_ble_string(schema),
+                parsing.decode_ble_string(values),
+                shadow,
+            )
+            _apply_vmini_shadow(device, shadow)
+        else:
+            self.logger.debug(
+                "VMini shadow unavailable (schema=%s, values=%s)",
+                schema is not None,
+                values is not None,
+            )
         return device
 
     async def _read_vertuo_next(
