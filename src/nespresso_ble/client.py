@@ -204,6 +204,9 @@ class NespressoBluetoothDeviceData:
             return
         if family is MachineFamily.VMINI:
             token = self.auth_key.encode("utf-8").ljust(VMINI_TOKEN_LENGTH, b"\x00")
+            # The machine token characteristic requires an encrypted link, so
+            # establish BLE bonding first.
+            await self._pair(client)
             try:
                 await client.write_gatt_char(
                     VMINI_CHAR_MACHINE_TOKEN, token, response=True
