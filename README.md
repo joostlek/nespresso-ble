@@ -58,3 +58,20 @@ uv sync --all-groups
 uv run pytest
 uv run prek run --all-files
 ```
+
+## Attribution
+
+This library builds on the reverse engineering work of several projects. Huge
+thanks to their authors:
+
+- [renaudallard/homeassistant_nespresso_smart](https://github.com/renaudallard/homeassistant_nespresso_smart)
+  — reverse engineered the Nespresso Smart Android app, documenting the VMini
+  (Vertuo Mini), Vertuo Next and Barista GATT services, characteristics, state
+  encodings and authentication. Its protocol documentation is the basis for the
+  parsing in this library.
+- [bulldog5046/ha_nespresso_integration](https://github.com/bulldog5046/ha_nespresso_integration)
+  — reverse engineered the Original line (Expert/Prodigio) protocol, auth/
+  onboarding flow and brew commands via BLE captures.
+- [tikismoke/home-assistant-nespressoble](https://github.com/tikismoke/home-assistant-nespressoble)
+  and everyone before them who helped decode the Nespresso BLE protocols.
+
