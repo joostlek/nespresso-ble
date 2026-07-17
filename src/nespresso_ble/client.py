@@ -197,6 +197,9 @@ class NespressoBluetoothDeviceData:
             return
         if family is MachineFamily.VMINI:
             token = self.auth_key.encode("utf-8").ljust(VMINI_TOKEN_LENGTH, b"\x00")
+            # The machine token characteristic requires an encrypted link, so
+            # establish BLE bonding first.
+            await self._pair(client)
             try:
                 await client.write_gatt_char(
                     VMINI_CHAR_MACHINE_TOKEN, token, response=True
@@ -205,6 +208,16 @@ class NespressoBluetoothDeviceData:
                 msg = f"VMini authentication failed: {err}"
                 raise AuthError(msg) from err
             self.logger.debug("Wrote VMini machine token (%d bytes)", len(token))
+
+    async def _pair(self, client: BleakClient) -> bool:
+        """Attempt BLE bonding. Returns True when pairing did not raise."""
+        try:
+            await client.pair()
+        except (BleakError, NotImplementedError) as err:
+            self.logger.debug("Pairing not available/failed: %s", err)
+            return False
+        self.logger.debug("Pairing succeeded")
+        return True
 
     async def _read(
         self, client: BleakClient, ble_device: BLEDevice, family: MachineFamily
