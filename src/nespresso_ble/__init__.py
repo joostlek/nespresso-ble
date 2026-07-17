@@ -15,8 +15,6 @@ from .exceptions import (
 )
 from .models import NespressoDevice
 
-__version__ = "0.3.0"
-
 __all__ = [
     "ALL_SERVICE_UUIDS",
     "SERVICE_UUID_TO_FAMILY",
