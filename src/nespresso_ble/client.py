@@ -193,6 +193,7 @@ class NespressoBluetoothDeviceData:
 
     async def _authenticate(self, client: BleakClient, family: MachineFamily) -> None:
         if self.auth_key is None:
+            self.logger.debug("No auth key set; skipping authentication")
             return
         if family is MachineFamily.VMINI:
             token = self.auth_key.encode("utf-8").ljust(VMINI_TOKEN_LENGTH, b"\x00")
@@ -203,6 +204,7 @@ class NespressoBluetoothDeviceData:
             except BleakError as err:
                 msg = f"VMini authentication failed: {err}"
                 raise AuthError(msg) from err
+            self.logger.debug("Wrote VMini machine token (%d bytes)", len(token))
 
     async def _read(
         self, client: BleakClient, ble_device: BLEDevice, family: MachineFamily
