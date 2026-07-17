@@ -74,4 +74,3 @@ thanks to their authors:
   onboarding flow and brew commands via BLE captures.
 - [tikismoke/home-assistant-nespressoble](https://github.com/tikismoke/home-assistant-nespressoble)
   and everyone before them who helped decode the Nespresso BLE protocols.
-
