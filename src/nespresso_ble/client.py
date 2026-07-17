@@ -151,18 +151,12 @@ class NespressoBluetoothDeviceData:
     async def _connect(
         self, ble_device: BLEDevice, disconnect_future: asyncio.Future[bool]
     ) -> BleakClient:
-        """Establish a connection, bonding at connect time when authenticating.
-
-        VMini requires an encrypted (bonded) link before its protected
-        characteristics accept operations, so we pair during connection setup
-        when an auth key is configured. On BlueZ this creates a persistent bond.
-        """
+        """Establish a connection to the machine."""
         return await establish_connection(
             self.client_class,
             ble_device,
             ble_device.address,
             disconnected_callback=partial(self._on_disconnect, disconnect_future),
-            pair=self.auth_key is not None,
         )
 
     async def _update_device(self, ble_device: BLEDevice) -> NespressoDevice:
@@ -204,33 +198,23 @@ class NespressoBluetoothDeviceData:
             return
         if family is MachineFamily.VMINI:
             token = self.auth_key.encode("utf-8").ljust(VMINI_TOKEN_LENGTH, b"\x00")
-            # The machine token characteristic requires an encrypted link, so
-            # establish BLE bonding first.
-            await self._pair(client)
+            # VMini's token characteristic requires a bonded (encrypted) link.
+            paired = await self._pair(client)
             try:
                 await client.write_gatt_char(
                     VMINI_CHAR_MACHINE_TOKEN, token, response=True
                 )
             except BleakError as err:
-                # The token characteristic needs a bonded link. Bonding is
-                # normally done at connect time; retry once after an explicit
-                # pair in case the initial bond did not take.
-                self.logger.debug("Token write failed (%s); pairing and retrying", err)
-                if not await self._pair(client):
+                if not paired:
                     msg = (
                         "VMini authentication failed: the machine requires a bonded "
-                        "Bluetooth connection. Bonding is unreliable over an ESPHome "
-                        "Bluetooth proxy; onboard using a local Bluetooth adapter "
-                        f"({err})"
+                        "Bluetooth connection but pairing did not succeed. Bonding "
+                        "does not work over an ESPHome Bluetooth proxy; use a local "
+                        f"Bluetooth adapter ({err})"
                     )
-                    raise AuthError(msg) from err
-                try:
-                    await client.write_gatt_char(
-                        VMINI_CHAR_MACHINE_TOKEN, token, response=True
-                    )
-                except BleakError as err2:
-                    msg = f"VMini authentication failed after pairing: {err2}"
-                    raise AuthError(msg) from err2
+                else:
+                    msg = f"VMini authentication failed after pairing: {err}"
+                raise AuthError(msg) from err
             self.logger.debug("Wrote VMini machine token (%d bytes)", len(token))
 
     async def _pair(self, client: BleakClient) -> bool:
@@ -238,9 +222,9 @@ class NespressoBluetoothDeviceData:
         try:
             await client.pair()
         except Exception as err:  # noqa: BLE001  # pylint: disable=broad-exception-caught
-            self.logger.debug("Pairing not available/failed: %s", err)
+            self.logger.warning("VMini pairing failed: %s", err)
             return False
-        self.logger.debug("Pairing succeeded")
+        self.logger.info("VMini pairing succeeded")
         return True
 
     async def _read(
