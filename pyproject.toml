@@ -41,7 +41,7 @@ Changelog = "https://github.com/joostlek/nespresso-ble/releases"
 dev = [
     "codespell==2.4.3",
     "covdefaults==2.3.0",
-    "coverage[toml]==7.14.1",
+    "coverage[toml]==7.15.4",
     "mypy==1.18.2",
     "prek==0.4.13",
     "pre-commit-hooks==6.0.0",
